@@ -8,11 +8,11 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
-namespace PSParseGUI
+namespace PSParseGUI.Forms
 {
-    public partial class Form1 : Form
+    public partial class StatsForm : Form
     {
-        public Form1()
+        public StatsForm()
         {
             InitializeComponent();
         }

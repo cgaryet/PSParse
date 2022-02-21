@@ -165,7 +165,7 @@ namespace PSParseCmd
             PostSmallBlind = 0,
             PostBigBlind,
             BuyBlinds,
-            AlteredToSBBuyBlinds,
+            AlteredToBuyBlinds,
             Check,
             Bet,
             Call,
@@ -368,17 +368,17 @@ namespace PSParseCmd
         static List<Player> PlayerList = new List<Player>();
         static List<PlayerInDatabase> PlayersInDatabase = new List<PlayerInDatabase>();
 
-        static string HandNumberRegex = "PokerStars.+#(\\d+).+- (\\S+ \\S+)";
-        static string SeatRegex = "Seat \\d: (.+) \\((\\d+) in chips\\)";
-        static string BlindRegex = "(.+): posts (small|big|small & big) blind[s]? (\\d+)";
-        static string FoldRegex = "(.+): (folds|checks)";
-        static string BetOrCallRegex = "(.+): (bets|calls) (\\d+)";
-        static string RaiseRegex = "(.+): raises (\\d+) to (\\d+)";
-        static string UncalledBetRegex = "Uncalled bet \\((\\d+)\\) returned to (.+)";
-        static string CollectionRegex = "(.+) collected (\\d+) from(?: side| main)? pot";
-        static string TotalPotAndRake = "Total pot (\\d+)(?: Main pot \\d+\\. Side pot \\d+\\.)? \\| Rake (\\d+)";
-        static string StreetRegex = "\\*\\*\\* (FLOP|TURN|RIVER) \\*\\*\\* .+";
-        static string WentToShowdownRegex = "(.+): (shows|mucks)";
+        const string HandNumberRegex = "PokerStars.+#(\\d+).+- (\\S+ \\S+)";
+        const string SeatRegex = "Seat (\\d): (.+) \\((\\d+) in chips\\)";
+        const string BlindRegex = "(.+): posts (small|big|small & big) blind[s]? (\\d+)";
+        const string FoldRegex = "(.+): (folds|checks)";
+        const string BetOrCallRegex = "(.+): (bets|calls) (\\d+)";
+        const string RaiseRegex = "(.+): raises (\\d+) to (\\d+)";
+        const string UncalledBetRegex = "Uncalled bet \\((\\d+)\\) returned to (.+)";
+        const string CollectionRegex = "(.+) collected (\\d+) from(?: side| main)? pot(?:-\\d)?";
+        const string TotalPotAndRake = "Total pot (\\d+)(?: Main pot \\d+\\. (?:Side pot(?:-\\d)? \\d+\\. )*)? ?\\| Rake (\\d+)";
+        const string StreetRegex = "\\*\\*\\* (FLOP|TURN|RIVER) \\*\\*\\* .+";
+        const string WentToShowdownRegex = "(.+): (shows|mucks)";
 
 
         static void Main(string[] args)
@@ -436,32 +436,36 @@ namespace PSParseCmd
                     }
 
                     // 4. update chipcounts. if the player wasn't in the previous hand, mark this towards their total in count and add a tuple start
-                    if (PreviousHand == null || PreviousHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1)
+                    if (PreviousHand == null || PreviousHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1 ||
+                        NextHand == null || NextHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1)
                     {
-                        // if the previous began and ended tuple has an end with an identical chip count to this start, we sat out and rejoined, so dont add that
-                        bool bIdenticalChipStack = false;
-                        if (ExistingPlayer.Transactions.Count > 0)
+                        if (PreviousHand == null || PreviousHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1)
                         {
-                            Tuple<string, int, int> Previous = ExistingPlayer.Transactions[ExistingPlayer.Transactions.Count - 1];
-                            if (Previous.Item1 == "Cash-Out" && Previous.Item3 == Player.ChipCountStart)
+                            // if the previous began and ended tuple has an end with an identical chip count to this start, we sat out and rejoined, so dont add that
+                            bool bIdenticalChipStack = false;
+                            if (ExistingPlayer.Transactions.Count > 0)
                             {
-                                bIdenticalChipStack = true;
-                                // also remove "profit" and the tuple entirely
-                                ExistingPlayer.TotalChipCountOut -= Previous.Item3;
-                                ExistingPlayer.Transactions.Remove(Previous);
+                                Tuple<string, int, int> Previous = ExistingPlayer.Transactions[ExistingPlayer.Transactions.Count - 1];
+                                if (Previous.Item1 == "Cash-Out" && Previous.Item3 == Player.ChipCountStart)
+                                {
+                                    bIdenticalChipStack = true;
+                                    // also remove "profit" and the tuple entirely
+                                    ExistingPlayer.TotalChipCountOut -= Previous.Item3;
+                                    ExistingPlayer.Transactions.Remove(Previous);
+                                }
+                            }
+                            if (!bIdenticalChipStack)
+                            {
+                                ExistingPlayer.TotalChipCountIn += Player.ChipCountStart;
+                                ExistingPlayer.Transactions.Add(new Tuple<string, int, int>("Buy-In", HandIdx, Player.ChipCountStart));
                             }
                         }
-                        if (!bIdenticalChipStack)
+                        // if this player isn't in the NEXT hand, mark the end of the current tuple and set the total chip out count to the end of this hand
+                        if (NextHand == null || NextHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1)
                         {
-                            ExistingPlayer.TotalChipCountIn += Player.ChipCountStart;
-                            ExistingPlayer.Transactions.Add(new Tuple<string, int, int>("Buy-In", HandIdx, Player.ChipCountStart));
+                            ExistingPlayer.TotalChipCountOut += Player.ChipCountEnd;
+                            ExistingPlayer.Transactions.Add(new Tuple<string, int, int>("Cash-Out", HandIdx, Player.ChipCountEnd));
                         }
-                    }
-                    // if this player isn't in the NEXT hand, mark the end of the current tuple and set the total chip out count to the end of this hand
-                    else if (NextHand == null || NextHand.Players.FindIndex(Prev => Prev.Name == Player.Name) == -1)
-                    {
-                        ExistingPlayer.TotalChipCountOut += Player.ChipCountEnd;
-                        ExistingPlayer.Transactions.Add(new Tuple<string, int, int>("Cash-Out", HandIdx, Player.ChipCountEnd));
                     }
                     else
                     {
@@ -1393,9 +1397,17 @@ namespace PSParseCmd
                     // if this raise was from a player bought blind, we'll have an extra small blind left over, so just alter this action to be a commiting small blind
                     else if (Action.Action == PlayerAction.BuyBlinds)
                     {
-                        Action.Action = PlayerAction.AlteredToSBBuyBlinds;
-                        Action.Amount = Hand.SmallBlindAmount;
-                        Action.FinalChipCommit = true;
+                        Action.Action = PlayerAction.AlteredToBuyBlinds;
+                        if (Action.Amount == Hand.SmallBlindAmount + Hand.BigBlindAmount || Action.Amount == Hand.SmallBlindAmount)
+                        {
+                            Action.Amount = Hand.SmallBlindAmount;
+                            Action.FinalChipCommit = true;
+                        }
+                        else if (Action.Amount == Hand.BigBlindAmount)
+                        {
+                            Action.Amount = 0;
+                            Action.FinalChipCommit = true;
+                        }
                         break;
                     }
                 }
@@ -1512,37 +1524,52 @@ namespace PSParseCmd
                 PlayerInHand ExistingPlayer = Hand.Players.FirstOrDefault(p => p.Name == PlayerName);
                 if (BlindPosition == "small")
                 {
-                    Hand.SmallBlindAmount = BlindValue;
-                    Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.PostSmallBlind, Amount = BlindValue });
-
-                    // once the small blind line is posted, we know all the players and positions at the table
-                    int PlayerIdx = Hand.Players.IndexOf(ExistingPlayer);
-
-                    // figure out how many positions we actually have to fill. we'll always have a sb/bb
-                    List<TablePosition> PositionsToFill = FillPositions(Hand);
-                    int CurrentPositionIdx = 0;
-                    while (true)
+                    if (Hand.SmallBlindAmount == 0)
                     {
-                        // if we get back to the current player, break out of the loop
-                        if (PlayerIdx == Hand.Players.IndexOf(ExistingPlayer) && ExistingPlayer.Position != TablePosition.Unset)
-                        {
-                            break;
-                        }
-                        // otherwise start assigning positions based on sb being count 1, button being count 9
-                        Hand.Players[PlayerIdx].Position = PositionsToFill[CurrentPositionIdx];
-                        CurrentPositionIdx++;
-                        PlayerIdx++;
-                        if (PlayerIdx == Hand.Players.Count)
-                        {
-                            PlayerIdx = 0;
-                        }
+                        Hand.SmallBlindAmount = BlindValue;
+                        Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.PostSmallBlind, Amount = BlindValue });
 
+                        // once the small blind line is posted, we know all the players and positions at the table
+                        int PlayerIdx = Hand.Players.IndexOf(ExistingPlayer);
+
+                        // figure out how many positions we actually have to fill. we'll always have a sb/bb
+                        List<TablePosition> PositionsToFill = FillPositions(Hand);
+                        int CurrentPositionIdx = 0;
+                        while (true)
+                        {
+                            // if we get back to the current player, break out of the loop
+                            if (PlayerIdx == Hand.Players.IndexOf(ExistingPlayer) && ExistingPlayer.Position != TablePosition.Unset)
+                            {
+                                break;
+                            }
+                            // otherwise start assigning positions based on sb being count 1, button being count 9
+                            Hand.Players[PlayerIdx].Position = PositionsToFill[CurrentPositionIdx];
+                            CurrentPositionIdx++;
+                            PlayerIdx++;
+                            if (PlayerIdx == Hand.Players.Count)
+                            {
+                                PlayerIdx = 0;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Hand.PurchasedHandAmount = BlindValue;
+                        Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.BuyBlinds, Amount = BlindValue });
                     }
                 }
                 else if (BlindPosition == "big")
                 {
-                    Hand.BigBlindAmount = BlindValue;
-                    Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.PostBigBlind, Amount = BlindValue });
+                    if (Hand.BigBlindAmount == 0)
+                    {
+                        Hand.BigBlindAmount = BlindValue;
+                        Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.PostBigBlind, Amount = BlindValue });
+                    }
+                    else
+                    {
+                        Hand.PurchasedHandAmount = BlindValue;
+                        Hand.Action.Add(new PlayerActionTaken { Hand = Hand, Player = ExistingPlayer, Action = PlayerAction.BuyBlinds, Amount = BlindValue });
+                    }
                 }
                 else if (BlindPosition == "small & big")
                 {
